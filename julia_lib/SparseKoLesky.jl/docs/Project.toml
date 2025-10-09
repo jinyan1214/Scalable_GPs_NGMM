@@ -1,5 +1,0 @@
-[deps]
-Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-LiveServer = "16fef848-5104-11e9-1b77-fb7a48bbb589"
-PyPrint = "302eade5-f262-4753-bf72-f2441e1ae844"
-SparseKoLesky = "169a2823-b557-4ad6-8966-766aa27898bd"

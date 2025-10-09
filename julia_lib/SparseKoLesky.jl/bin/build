@@ -1,7 +1,0 @@
-#!/bin/bash
-# script to build the site locally
-
-site_dir="docs"
-
-julia --project="$site_dir" --optimize=0 "$site_dir/make.jl"
-
