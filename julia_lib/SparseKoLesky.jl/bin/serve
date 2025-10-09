@@ -1,0 +1,9 @@
+#!/bin/bash
+# script to serve the site locally
+
+site_dir="docs"
+
+julia \
+    --project="$site_dir" \
+    --eval "using LiveServer; serve(dir=\"$site_dir/build\")"
+

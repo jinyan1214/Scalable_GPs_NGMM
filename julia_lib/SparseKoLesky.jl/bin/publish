@@ -1,0 +1,10 @@
+#!/bin/bash
+# script to deploy the site to Cloudflare pages
+
+site_dir="docs"
+
+GITHUB_ACTOR="stephen-huan"
+GITHUB_TOKEN="$(pass programming/github.com/token/$GITHUB_ACTOR)"
+export GITHUB_ACTOR GITHUB_TOKEN
+
+julia --project="$site_dir" --optimize=0 "$site_dir/deploy.jl"

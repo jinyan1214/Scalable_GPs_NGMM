@@ -1,0 +1,18 @@
+name = "GMKernels"
+uuid = "6277a071-2e8f-4d37-bc4e-27ccd16ffca7"
+authors = ["Greg Lavrentiadis <glavrentiadis@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+FastGaussQuadrature = "442a2c76-b920-505d-bb47-c5924d526838"
+Functors = "d9f16b24-f501-4c13-a1f2-28368ffc5196"
+KernelFunctions = "ec8451be-7e33-11e9-00cf-bbf324bd1392"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+FastGaussQuadrature = "1.0.2"
+Functors = "0.5.2"
+KernelFunctions = "0.10.65"
+LinearAlgebra = "1.11.0"
+StaticArrays = "1.9.13"

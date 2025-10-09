@@ -1,0 +1,891 @@
+import LinearAlgebra.norm
+using StaticArrays
+# autoDiff 
+using ForwardDiff
+abstract type AbstractCovarianceFunction{Tv} end
+
+# automatically implements a mutating batched version of a given covariance function 
+function (cov::AbstractCovarianceFunction{Tv})(
+    out::AbstractMatrix{Tv},
+    x_vec::AbstractVector{<:AbstractMeasurement},
+    y_vec::AbstractVector{<:AbstractMeasurement},
+) where {Tv}
+    for cartesian in CartesianIndices(out)
+        out[cartesian] = cov(x_vec[cartesian[1]], y_vec[cartesian[2]])
+    end
+end
+
+# automatically implements a mutating batched version of a given covariance function, using symmetry
+function (cov::AbstractCovarianceFunction{Tv})(
+    out::AbstractMatrix{Tv}, x_vec::AbstractVector{<:AbstractMeasurement}
+) where {Tv}
+    for cartesian in CartesianIndices(out)
+        if cartesian[1] >= cartesian[2]
+            out[cartesian] = cov(x_vec[cartesian[1]], x_vec[cartesian[2]])
+        else
+            out[cartesian] = out[cartesian[2], cartesian[1]]
+        end
+    end
+end
+
+struct MaternCovariance1_2{Tv} <: AbstractCovarianceFunction{Tv}
+    length_scale::Tv
+end
+function (cov::MaternCovariance1_2)(x::PointMeasurement, y::PointMeasurement)
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return exp(-dist / sigma)
+end
+
+struct MaternCovariance3_2{Tv} <: AbstractCovarianceFunction{Tv}
+    length_scale::Tv
+end
+function (cov::MaternCovariance3_2)(x::PointMeasurement, y::PointMeasurement)
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return (1 + sqrt(3) * dist / sigma) * exp(-sqrt(3) * dist / sigma)
+end
+
+# The Matern covariance function
+struct MaternCovariance5_2{Tv} <: AbstractCovarianceFunction{Tv}
+    length_scale::Tv
+end
+
+# Matern covariance function
+function (cov::MaternCovariance5_2)(x::PointMeasurement, y::PointMeasurement)
+    # d = length(x.coordinate)
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    function F(t, a)
+        return (1 + sqrt(5) * t / a + 5 * t^2 / (3 * a^2)) *
+               exp(-sqrt(5) * t / a)
+    end
+    return F(dist, sigma)
+end
+
+function (cov::MaternCovariance5_2)(
+    x::ΔδPointMeasurement, y::ΔδPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+
+    function F(t, a)
+        return (1 + sqrt(5) * t / a + 5 * t^2 / (3 * a^2)) *
+               exp(-sqrt(5) * t / a)
+    end
+    function D2F(t, a)
+        return -5 * (d * a^2 + sqrt(5) * d * a * t - 5 * t^2) / (3 * a^4) *
+               exp(-sqrt(5) * t / a)
+    end
+    function D4F(t, a)
+        return 25 *
+               (d * (d + 2) * a^2 - (3 + 2 * d) * sqrt(5) * a * t + 5 * t^2) /
+               (3 * a^6) * exp(-sqrt(5) * t / a)
+    end
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma)
+end
+
+function (cov::MaternCovariance5_2)(
+    x::Δ∇δPointMeasurement, y::Δ∇δPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    wg_x = x.weight_∇
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    wg_y = y.weight_∇
+
+    function F(t, a)
+        return (1 + sqrt(5) * t / a + 5 * t^2 / (3 * a^2)) *
+               exp(-sqrt(5) * t / a)
+    end
+    function D2F(t, a)
+        return -5 * (d * a^2 + sqrt(5) * d * a * t - 5 * t^2) / (3 * a^4) *
+               exp(-sqrt(5) * t / a)
+    end
+    function D4F(t, a)
+        return 25 *
+               (d * (d + 2) * a^2 - (3 + 2 * d) * sqrt(5) * a * t + 5 * t^2) /
+               (3 * a^6) * exp(-sqrt(5) * t / a)
+    end
+    DF(t, a) = -5 * (a + sqrt(5) * t) * exp(-sqrt(5) * t / a) / (3 * a^3)
+    function D3F(t, a)
+        return 25 * exp(-sqrt(5) * t / a) * (a * (2 + d) - sqrt(5) * t) /
+               (3 * a^5)
+    end
+    DDF(t, a) = 25 * exp(-sqrt(5) * t / a) / (3 * a^4)
+    vec = x.coordinate - y.coordinate
+    dist = norm(vec)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma) -
+           w1_x * D3F(dist, sigma) * sum(vec .* wg_y) +
+           w1_y * D3F(dist, sigma) * sum(vec .* wg_x) -
+           w2_x * DF(dist, sigma) * sum(vec .* wg_y) +
+           w2_y * DF(dist, sigma) * sum(vec .* wg_x) +
+           (
+               sum(-wg_x .* wg_y) * DF(dist, sigma) +
+               sum(wg_x .* vec) * sum(-wg_y .* vec) * DDF(dist, sigma)
+           )
+end
+
+# dim = 2
+function (cov::MaternCovariance5_2)(
+    x::∂∂PointMeasurement, y::∂∂PointMeasurement
+)
+    function F(x, y, a)
+        eps = 1e-8
+        t = sqrt((x[1] - y[1])^2 + (x[2] - y[2])^2 + eps)
+        return (1 + sqrt(5) * t / a + 5 * t^2 / (3 * a^2)) *
+               exp(-sqrt(5) * t / a)
+    end
+
+    function Hx_F(x, y, a)
+        hessian = ForwardDiff.hessian(x -> F(x, y, a), x)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    function HxHy_F(x, y, a)
+        hessian = ForwardDiff.jacobian(
+            y -> ForwardDiff.jacobian(y -> Hx_F(x, y, a), y), y
+        )
+        return hessian[SVector{9,Int64}(1, 2, 3, 4, 5, 6, 10, 11, 12)]
+    end
+
+    sigma = cov.length_scale
+    vec = HxHy_F(x.coordinate, y.coordinate, sigma)
+    wx = @SVector [x.weight_∂11, x.weight_∂12, x.weight_∂22]
+    wy = @SVector [y.weight_∂11, y.weight_∂12, y.weight_∂22]
+    # @show typeof(vec)
+    # @show vec, wx, wy
+    ans = 0
+    @inbounds for j in 1:3
+        @inbounds for i in 1:3
+            ans += vec[3 * (j - 1) + i] * wx[i] * wy[j]
+        end
+    end
+    return ans
+end
+
+function (cov::MaternCovariance5_2)(x::PointMeasurement, y::∂∂PointMeasurement)
+    function F(x, y, a)
+        eps = 1e-8
+        t = sqrt((x[1] - y[1])^2 + (x[2] - y[2])^2 + eps)
+        return (1 + sqrt(5) * t / a + 5 * t^2 / (3 * a^2)) *
+               exp(-sqrt(5) * t / a)
+    end
+
+    function Hy_F(x, y, a)
+        hessian = ForwardDiff.hessian(y -> F(x, y, a), y)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    sigma = cov.length_scale
+    vec = Hy_F(x.coordinate, y.coordinate, sigma)
+    wy = @SVector [y.weight_∂11, y.weight_∂12, y.weight_∂22]
+    return sum(vec .* wy)
+end
+
+function (cov::MaternCovariance5_2)(x::∂∂PointMeasurement, y::PointMeasurement)
+    function F(x, y, a)
+        eps = 1e-8
+        t = sqrt((x[1] - y[1])^2 + (x[2] - y[2])^2 + eps)
+        return (1 + sqrt(5) * t / a + 5 * t^2 / (3 * a^2)) *
+               exp(-sqrt(5) * t / a)
+    end
+
+    function Hx_F(x, y, a)
+        hessian = ForwardDiff.hessian(x -> F(x, y, a), x)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    sigma = cov.length_scale
+    vec = Hx_F(x.coordinate, y.coordinate, sigma)
+    wx = @SVector [x.weight_∂11, x.weight_∂12, x.weight_∂22]
+    return sum(vec .* wx)
+end
+
+struct MaternCovariance7_2{Tv} <: AbstractCovarianceFunction{Tv}
+    length_scale::Tv
+end
+
+# Matern covariance function
+function (cov::MaternCovariance7_2)(x::PointMeasurement, y::PointMeasurement)
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    function F(t, a)
+        return (
+            15 * a^3 +
+            15 * sqrt(7) * a^2 * t +
+            42 * a * t^2 +
+            7 * sqrt(7) * t^3
+        ) / (15 * a^3) * exp(-sqrt(7) * t / a)
+    end
+    return F(dist, sigma)
+end
+
+function (cov::MaternCovariance7_2)(
+    x::ΔδPointMeasurement, y::ΔδPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    function F(t, a)
+        return (
+            15 * a^3 +
+            15 * sqrt(7) * a^2 * t +
+            42 * a * t^2 +
+            7 * sqrt(7) * t^3
+        ) / (15 * a^3) * exp(-sqrt(7) * t / a)
+    end
+    function D2F(t, a)
+        return -7 * (
+            3 * d * a^3 + 3 * sqrt(7) * a^2 * d * t + 7 * a * (d - 1) * t^2 -
+            7 * sqrt(7) * t^3
+        ) / (15 * a^5) * exp(-sqrt(7) * t / a)
+    end
+    function D4F(t, a)
+        return 49 * (
+            d * (d + 2) * a^3 + d * (d + 2) * sqrt(7) * a^2 * t -
+            14 * a * (2 + d) * t^2 + 7 * sqrt(7) * t^3
+        ) / (15 * a^7) * exp(-sqrt(7) * t / a)
+    end
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma)
+end
+
+function (cov::MaternCovariance7_2)(
+    x::Δ∇δPointMeasurement, y::Δ∇δPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    wg_x = x.weight_∇
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    wg_y = y.weight_∇
+
+    function F(t, a)
+        return (
+            15 * a^3 +
+            15 * sqrt(7) * a^2 * t +
+            42 * a * t^2 +
+            7 * sqrt(7) * t^3
+        ) / (15 * a^3) * exp(-sqrt(7) * t / a)
+    end
+    function D2F(t, a)
+        return -7 * (
+            3 * d * a^3 + 3 * sqrt(7) * a^2 * d * t + 7 * a * (d - 1) * t^2 -
+            7 * sqrt(7) * t^3
+        ) / (15 * a^5) * exp(-sqrt(7) * t / a)
+    end
+    function D4F(t, a)
+        return 49 * (
+            d * (d + 2) * a^3 + d * (d + 2) * sqrt(7) * a^2 * t -
+            14 * a * (2 + d) * t^2 + 7 * sqrt(7) * t^3
+        ) / (15 * a^7) * exp(-sqrt(7) * t / a)
+    end
+    function DF(t, a)
+        return -7 *
+               (3 * a^2 + 3 * sqrt(7) * a * t + 7 * t^2) *
+               exp(-sqrt(7) * t / a) / (15 * a^4)
+    end
+    function D3F(t, a)
+        return 49 *
+               exp(-sqrt(7) * t / a) *
+               (a^2 * (2 + d) + sqrt(7) * a * (2 + d) * t - 7 * t^2) /
+               (15 * a^6)
+    end
+    DDF(t, a) = 49 * exp(-sqrt(7) * t / a) * (a + sqrt(7) * t) / (15 * a^5)
+    vec = x.coordinate - y.coordinate
+    dist = norm(vec)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma) -
+           w1_x * D3F(dist, sigma) * sum(vec .* wg_y) +
+           w1_y * D3F(dist, sigma) * sum(vec .* wg_x) -
+           w2_x * DF(dist, sigma) * sum(vec .* wg_y) +
+           w2_y * DF(dist, sigma) * sum(vec .* wg_x) +
+           (
+               sum(-wg_x .* wg_y) * DF(dist, sigma) +
+               sum(wg_x .* vec) * sum(-wg_y .* vec) * DDF(dist, sigma)
+           )
+end
+
+# dim = 2
+function (cov::MaternCovariance7_2)(
+    x::∂∂PointMeasurement, y::∂∂PointMeasurement
+)
+    function F(x, y, a)
+        eps = 1e-8
+        t = sqrt((x[1] - y[1])^2 + (x[2] - y[2])^2 + eps)
+        return (
+            15 * a^3 +
+            15 * sqrt(7) * a^2 * t +
+            42 * a * t^2 +
+            7 * sqrt(7) * t^3
+        ) / (15 * a^3) * exp(-sqrt(7) * t / a)
+    end
+
+    function Hx_F(x, y, a)
+        hessian = ForwardDiff.hessian(x -> F(x, y, a), x)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    function HxHy_F(x, y, a)
+        hessian = ForwardDiff.jacobian(
+            y -> ForwardDiff.jacobian(y -> Hx_F(x, y, a), y), y
+        )
+        return hessian[SVector{9,Int64}(1, 2, 3, 4, 5, 6, 10, 11, 12)]
+    end
+
+    sigma = cov.length_scale
+    vec = HxHy_F(x.coordinate, y.coordinate, sigma)
+    wx = @SVector [x.weight_∂11, x.weight_∂12, x.weight_∂22]
+    wy = @SVector [y.weight_∂11, y.weight_∂12, y.weight_∂22]
+    # @show typeof(vec)
+    # @show vec, wx, wy
+    ans = 0
+    @inbounds for j in 1:3
+        @inbounds for i in 1:3
+            ans += vec[3 * (j - 1) + i] * wx[i] * wy[j]
+        end
+    end
+    return ans
+end
+
+function (cov::MaternCovariance7_2)(x::PointMeasurement, y::∂∂PointMeasurement)
+    function F(x, y, a)
+        eps = 1e-8
+        t = sqrt((x[1] - y[1])^2 + (x[2] - y[2])^2 + eps)
+        return (
+            15 * a^3 +
+            15 * sqrt(7) * a^2 * t +
+            42 * a * t^2 +
+            7 * sqrt(7) * t^3
+        ) / (15 * a^3) * exp(-sqrt(7) * t / a)
+    end
+
+    function Hy_F(x, y, a)
+        hessian = ForwardDiff.hessian(y -> F(x, y, a), y)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    sigma = cov.length_scale
+    vec = Hy_F(x.coordinate, y.coordinate, sigma)
+    wy = @SVector [y.weight_∂11, y.weight_∂12, y.weight_∂22]
+    return sum(vec .* wy)
+end
+
+function (cov::MaternCovariance7_2)(x::∂∂PointMeasurement, y::PointMeasurement)
+    function F(x, y, a)
+        eps = 1e-8
+        t = sqrt((x[1] - y[1])^2 + (x[2] - y[2])^2 + eps)
+        return (
+            15 * a^3 +
+            15 * sqrt(7) * a^2 * t +
+            42 * a * t^2 +
+            7 * sqrt(7) * t^3
+        ) / (15 * a^3) * exp(-sqrt(7) * t / a)
+    end
+
+    function Hx_F(x, y, a)
+        hessian = ForwardDiff.hessian(x -> F(x, y, a), x)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    sigma = cov.length_scale
+    vec = Hx_F(x.coordinate, y.coordinate, sigma)
+    wx = @SVector [x.weight_∂11, x.weight_∂12, x.weight_∂22]
+    return sum(vec .* wx)
+end
+
+struct MaternCovariance9_2{Tv} <: AbstractCovarianceFunction{Tv}
+    length_scale::Tv
+end
+
+# Matern covariance function
+function (cov::MaternCovariance9_2)(x::PointMeasurement, y::PointMeasurement)
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    function F(t, a)
+        return (
+            35 * a^4 +
+            105 * a^3 * t +
+            135 * a^2 * t^2 +
+            90 * a * t^3 +
+            27 * t^4
+        ) / (35 * a^4) * exp(-3 * t / a)
+    end
+    return F(dist, sigma)
+end
+
+function (cov::MaternCovariance9_2)(
+    x::ΔδPointMeasurement, y::ΔδPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    function F(t, a)
+        return (
+            35 * a^4 +
+            105 * a^3 * t +
+            135 * a^2 * t^2 +
+            90 * a * t^3 +
+            27 * t^4
+        ) / (35 * a^4) * exp(-3 * t / a)
+    end
+    function D2F(t, a)
+        return -9 * (
+            5 * d * a^4 +
+            15 * d * a^3 * t +
+            9 * a^2 * (2 * d - 1) * t^2 +
+            9 * a * (d - 3) * t^3 - 27 * t^4
+        ) / (35 * a^6) * exp(-3 * t / a)
+    end
+    function D4F(t, a)
+        return 81 * (
+            d * (d + 2) * a^4 +
+            3 * a^3 * d * (d + 2) * t +
+            3 * a^2 * (d^2 - 4) - 18 * a * (d + 2) * t^3 + 27 * t^4
+        ) / (35 * a^8) * exp(-3 * t / a)
+    end
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma)
+end
+
+function (cov::MaternCovariance9_2)(
+    x::Δ∇δPointMeasurement, y::Δ∇δPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    wg_x = x.weight_∇
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    wg_y = y.weight_∇
+
+    function F(t, a)
+        return (
+            35 * a^4 +
+            105 * a^3 * t +
+            135 * a^2 * t^2 +
+            90 * a * t^3 +
+            27 * t^4
+        ) / (35 * a^4) * exp(-3 * t / a)
+    end
+    function D2F(t, a)
+        return -9 * (
+            5 * d * a^4 +
+            15 * d * a^3 * t +
+            9 * a^2 * (2 * d - 1) * t^2 +
+            9 * a * (d - 3) * t^3 - 27 * t^4
+        ) / (35 * a^6) * exp(-3 * t / a)
+    end
+    function D4F(t, a)
+        return 81 * (
+            d * (d + 2) * a^4 +
+            3 * a^3 * d * (d + 2) * t +
+            3 * a^2 * (d^2 - 4) * (t^2) - 18 * a * (d + 2) * t^3 + 27 * t^4
+        ) / (35 * a^8) * exp(-3 * t / a)
+    end
+    function DF(t, a)
+        return -9 *
+               (5 * a^3 + 15 * a^2 * t + 18 * a * t^2 + 9 * t^3) *
+               exp(-3 * t / a) / (35 * a^5)
+    end
+    function D3F(t, a)
+        return 81 *
+               exp(-3 * t / a) *
+               (
+                   a^3 * (2 + d) +
+                   3 * a^2 * (2 + d) * t +
+                   3 * a * (1 + d) * t^2 - 9 * t^3
+               ) / (35 * a^7)
+    end
+    DDF(t, a) = 81 * exp(-3 * t / a) * (a^2 + 3 * a * t + 3 * t^2) / (35 * a^6)
+    vec = x.coordinate - y.coordinate
+    dist = norm(vec)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma) -
+           w1_x * D3F(dist, sigma) * sum(vec .* wg_y) +
+           w1_y * D3F(dist, sigma) * sum(vec .* wg_x) -
+           w2_x * DF(dist, sigma) * sum(vec .* wg_y) +
+           w2_y * DF(dist, sigma) * sum(vec .* wg_x) +
+           (
+               sum(-wg_x .* wg_y) * DF(dist, sigma) +
+               sum(wg_x .* vec) * sum(-wg_y .* vec) * DDF(dist, sigma)
+           )
+end
+
+struct MaternCovariance11_2{Tv} <: AbstractCovarianceFunction{Tv}
+    length_scale::Tv
+end
+
+# Matern covariance function
+function (cov::MaternCovariance11_2)(x::PointMeasurement, y::PointMeasurement)
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    function F(t, a)
+        return (
+            945 * a^5 +
+            945 * sqrt(11) * a^4 * t +
+            4620 * a^3 * t^2 +
+            1155 * sqrt(11) * a^2 * t^3 +
+            1815 * a * t^4 +
+            121 * sqrt(11) * t^5
+        ) / (945 * a^5) * exp(-sqrt(11) * t / a)
+    end
+    return F(dist, sigma)
+end
+
+function (cov::MaternCovariance11_2)(
+    x::ΔδPointMeasurement, y::ΔδPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    function F(t, a)
+        return (
+            945 * a^5 +
+            945 * sqrt(11) * a^4 * t +
+            4620 * a^3 * t^2 +
+            1155 * sqrt(11) * a^2 * t^3 +
+            1815 * a * t^4 +
+            121 * sqrt(11) * t^5
+        ) / (945 * a^5) * exp(-sqrt(11) * t / a)
+    end
+    function D2F(t, a)
+        return -11 * (
+            105 * d * a^5 +
+            105 * d * sqrt(11) * a^4 * t +
+            165 * (3 * d - 1) * a^3 * t^2 +
+            55 * sqrt(11) * (2 * d - 3) * a^2 * t^3 +
+            121 * (d - 6) * a * t^4 - 121 * sqrt(11) * t^5
+        ) / (945 * a^7) * exp(-sqrt(11) * t / a)
+    end
+    function D4F(t, a)
+        return 121 * (
+            15 * d * (2 + d) * a^5 +
+            15 * d * (2 + d) * sqrt(11) * a^4 * t +
+            66 * (d^2 + d - 2) * a^3 * t^2 +
+            11 * sqrt(11) * a^2 * (d^2 - 4 * d - 12) * t^3 -
+            121 * (3 + 2 * d) * a * t^4 + 121 * sqrt(11) * t^5
+        ) / (945 * a^9) * exp(-sqrt(11) * t / a)
+    end
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma)
+end
+
+function (cov::MaternCovariance11_2)(
+    x::Δ∇δPointMeasurement, y::Δ∇δPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    wg_x = x.weight_∇
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    wg_y = y.weight_∇
+
+    function F(t, a)
+        return (
+            945 * a^5 +
+            945 * sqrt(11) * a^4 * t +
+            4620 * a^3 * t^2 +
+            1155 * sqrt(11) * a^2 * t^3 +
+            1815 * a * t^4 +
+            121 * sqrt(11) * t^5
+        ) / (945 * a^5) * exp(-sqrt(11) * t / a)
+    end
+    function D2F(t, a)
+        return -11 * (
+            105 * d * a^5 +
+            105 * d * sqrt(11) * a^4 * t +
+            165 * (3 * d - 1) * a^3 * t^2 +
+            55 * sqrt(11) * (2 * d - 3) * a^2 * t^3 +
+            121 * (d - 6) * a * t^4 - 121 * sqrt(11) * t^5
+        ) / (945 * a^7) * exp(-sqrt(11) * t / a)
+    end
+    function D4F(t, a)
+        return 121 * (
+            15 * d * (2 + d) * a^5 +
+            15 * d * (2 + d) * sqrt(11) * a^4 * t +
+            66 * (d^2 + d - 2) * a^3 * t^2 +
+            11 * sqrt(11) * a^2 * (d^2 - 4 * d - 12) * t^3 -
+            121 * (3 + 2 * d) * a * t^4 + 121 * sqrt(11) * t^5
+        ) / (945 * a^9) * exp(-sqrt(11) * t / a)
+    end
+    function DF(t, a)
+        return -11 *
+               (
+                   105 * a^4 +
+                   105 * sqrt(11) * a^3 * t +
+                   495 * a^2 * t^2 +
+                   110 * sqrt(11) * a * t^3 +
+                   121 * t^4
+               ) *
+               exp(-sqrt(11) * t / a) / (945 * a^6)
+    end
+    function D3F(t, a)
+        return 121 *
+               exp(-sqrt(11) * t / a) *
+               (
+                   15 * a^4 * (2 + d) +
+                   15 * sqrt(11) * a^3 * (2 + d) * t +
+                   33 * a^2 * (3 + 2 * d) * t^2 +
+                   11 * sqrt(11) * a * (d - 1) * t^3 - 121 * t^4
+               ) / (945 * a^8)
+    end
+    function DDF(t, a)
+        return 121 *
+               exp(-sqrt(11) * t / a) *
+               (
+                   15 * a^3 +
+                   15 * sqrt(11) * a^2 * t +
+                   66 * a * t^2 +
+                   11 * sqrt(11) * t^3
+               ) / (945 * a^7)
+    end
+    vec = x.coordinate - y.coordinate
+    dist = norm(vec)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma) -
+           w1_x * D3F(dist, sigma) * sum(vec .* wg_y) +
+           w1_y * D3F(dist, sigma) * sum(vec .* wg_x) -
+           w2_x * DF(dist, sigma) * sum(vec .* wg_y) +
+           w2_y * DF(dist, sigma) * sum(vec .* wg_x) +
+           (
+               sum(-wg_x .* wg_y) * DF(dist, sigma) +
+               sum(wg_x .* vec) * sum(-wg_y .* vec) * DDF(dist, sigma)
+           )
+end
+
+# The exponential covariance function
+struct GaussianCovariance{Tv} <: AbstractCovarianceFunction{Tv}
+    length_scale::Tv
+end
+
+function (cov::GaussianCovariance)(x::PointMeasurement, y::PointMeasurement)
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return exp(-dist^2 / (2 * sigma^2))
+end
+
+function (cov::GaussianCovariance)(
+    x::ΔδPointMeasurement, y::ΔδPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    F(t, a) = exp(-t^2 / (2 * a^2))
+    D2F(t, a) = (t^2 - a^2 * d) / (a^4) * exp(-t^2 / (2 * a^2))
+    function D4F(t, a)
+        return (a^4 * d * (2 + d) - 2 * a^2 * (2 + d) * t^2 + t^4) *
+               exp(-t^2 / (2 * a^2)) / a^8
+    end
+    dist = norm(x.coordinate - y.coordinate)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma)
+end
+
+function (cov::GaussianCovariance)(
+    x::Δ∇δPointMeasurement, y::Δ∇δPointMeasurement
+)
+    d = length(x.coordinate)
+    w1_x = x.weight_Δ
+    w2_x = x.weight_δ
+    wg_x = x.weight_∇
+    w1_y = y.weight_Δ
+    w2_y = y.weight_δ
+    wg_y = y.weight_∇
+
+    F(t, a) = exp(-t^2 / (2 * a^2))
+    D2F(t, a) = (t^2 - a^2 * d) / (a^4) * exp(-t^2 / (2 * a^2))
+    function D4F(t, a)
+        return (a^4 * d * (2 + d) - 2 * a^2 * (2 + d) * t^2 + t^4) *
+               exp(-t^2 / (2 * a^2)) / a^8
+    end
+    DF(t, a) = -exp(-t^2 / (2 * a^2)) / a^2
+    D3F(t, a) = exp(-t^2 / (2 * a^2)) * (a^2 * (2 + d) - t^2) / a^6
+    DDF(t, a) = exp(-t^2 / (2 * a^2)) / a^4
+    vec = x.coordinate - y.coordinate
+    dist = norm(vec)
+    sigma = cov.length_scale
+    return w1_x * w1_y * D4F(dist, sigma) +
+           (w2_x * w1_y + w1_x * w2_y) * D2F(dist, sigma) +
+           w2_x * w2_y * F(dist, sigma) -
+           w1_x * D3F(dist, sigma) * sum(vec .* wg_y) +
+           w1_y * D3F(dist, sigma) * sum(vec .* wg_x) -
+           w2_x * DF(dist, sigma) * sum(vec .* wg_y) +
+           w2_y * DF(dist, sigma) * sum(vec .* wg_x) +
+           (
+               sum(-wg_x .* wg_y) * DF(dist, sigma) +
+               sum(wg_x .* vec) * sum(-wg_y .* vec) * DDF(dist, sigma)
+           )
+end
+
+# dim = 2
+function (cov::GaussianCovariance)(
+    x::∂∂PointMeasurement, y::∂∂PointMeasurement
+)
+    function F(x, y, a)
+        t = (x[1] - y[1])^2 + (x[2] - y[2])^2
+        return exp(-t / (2 * a^2))
+    end
+
+    function Hx_F(x, y, a)
+        hessian = ForwardDiff.hessian(x -> F(x, y, a), x)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    function HxHy_F(x, y, a)
+        hessian = ForwardDiff.jacobian(
+            y -> ForwardDiff.jacobian(y -> Hx_F(x, y, a), y), y
+        )
+        return hessian[SVector{9,Int64}(1, 2, 3, 4, 5, 6, 10, 11, 12)]
+    end
+
+    sigma = cov.length_scale
+    vec = HxHy_F(x.coordinate, y.coordinate, sigma)
+    wx = @SVector [x.weight_∂11, x.weight_∂12, x.weight_∂22]
+    wy = @SVector [y.weight_∂11, y.weight_∂12, y.weight_∂22]
+    # @show typeof(vec)
+    # @show vec, wx, wy
+    ans = 0
+    @inbounds for j in 1:3
+        @inbounds for i in 1:3
+            ans += vec[3 * (j - 1) + i] * wx[i] * wy[j]
+        end
+    end
+    return ans
+end
+
+function (cov::GaussianCovariance)(x::PointMeasurement, y::∂∂PointMeasurement)
+    function F(x, y, a)
+        t = (x[1] - y[1])^2 + (x[2] - y[2])^2
+        return exp(-t / (2 * a^2))
+    end
+
+    function Hy_F(x, y, a)
+        hessian = ForwardDiff.hessian(y -> F(x, y, a), y)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    sigma = cov.length_scale
+    vec = Hy_F(x.coordinate, y.coordinate, sigma)
+    wy = @SVector [y.weight_∂11, y.weight_∂12, y.weight_∂22]
+    return sum(vec .* wy)
+end
+
+function (cov::GaussianCovariance)(x::∂∂PointMeasurement, y::PointMeasurement)
+    function F(x, y, a)
+        t = (x[1] - y[1])^2 + (x[2] - y[2])^2
+        return exp(-t / (2 * a^2))
+    end
+
+    function Hx_F(x, y, a)
+        hessian = ForwardDiff.hessian(x -> F(x, y, a), x)
+        return @SVector [hessian[1], hessian[2], hessian[4]]
+    end
+
+    sigma = cov.length_scale
+    vec = Hx_F(x.coordinate, y.coordinate, sigma)
+    wx = @SVector [x.weight_∂11, x.weight_∂12, x.weight_∂22]
+    return sum(vec .* wx)
+end
+
+function (cov::AbstractCovarianceFunction)(
+    x::ΔδPointMeasurement, y::PointMeasurement
+)
+    return cov(x, ΔδPointMeasurement(y))
+end
+
+function (cov::AbstractCovarianceFunction)(
+    x::Δ∇δPointMeasurement, y::PointMeasurement
+)
+    return cov(x, Δ∇δPointMeasurement(y))
+end
+
+function (cov::AbstractCovarianceFunction)(
+    x::PointMeasurement, y::ΔδPointMeasurement
+)
+    return (cov::AbstractCovarianceFunction)(y, x)
+end
+
+function (cov::AbstractCovarianceFunction)(
+    x::PointMeasurement, y::Δ∇δPointMeasurement
+)
+    return (cov::AbstractCovarianceFunction)(y, x)
+end
+
+# struct InverseQuadratic{Tv}<:AbstractCovarianceFunction{Tv}
+#     length_scale::Tv
+# end
+# function (cov::InverseQuadratic)(x::SVector{d,T}, y::SVector{d,T}) where {d,T}
+#     dist = norm(x-y)
+#     sigma = cov.length_scale
+#     return 1/(dist^2/(2*sigma^2)+1)
+# end
+# anonymous functions
+# forward differentiation is much faster than reverse: for low dimensional input especially
+# use ForwardDiff for input dim < 30 even with output dim = 1
+
+# function (cov::AbstractCovarianceFunction)(x::PointMeasurement, y::PointMeasurement)
+#     return cov(x.coordinate, y.coordinate)
+# end
+
+# incomplete
+# function Δx_cov(x::SVector{d,T}, y::SVector{d,T}) where {d,T}
+#     return 
+# end 
+# function (cov::AbstractCovarianceFunction)(x::ΔδPointMeasurement, y::ΔδPointMeasurement)
+#     d = length(x.coordinate);
+#     w1_x = x.weight_Δ;
+#     w2_x = x.weight_δ;
+#     w1_y = y.weight_Δ;
+#     w2_y = y.weight_δ;
+
+#     xc = x.coordinate
+#     yc = y.coordinate
+
+#     F(t,a) = 1/(t^2/(2*a^2)+1)
+#     D2F(t,a) = (t^2 - a^2*d)/(a^4)*exp(-t^2/(2*a^2));
+#     D4F(t,a) = (a^4*d*(2+d)-2*a^2*(2+d)*t^2+t^4)*exp(-t^2/(2*a^2))/a^8
+#     dist = norm(x.coordinate - y.coordinate);
+#     sigma = cov.length_scale;
+#     return w1_x*w1_y*D4F(dist,sigma) + (w2_x*w1_y+w1_x*w2_y)*D2F(dist,sigma) + w2_x*w2_y*F(dist,sigma)
+# end

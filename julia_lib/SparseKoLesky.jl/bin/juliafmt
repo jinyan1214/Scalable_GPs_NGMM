@@ -1,0 +1,6 @@
+#!/bin/bash
+# script to format Julia code with JuliaFormatter.jl
+
+julia \
+  --project="@." \
+  --eval "using JuliaFormatter; format(\"$1\")"
