@@ -56,6 +56,24 @@ def read_hdf5_with_site_id(file_path, dtype = np.float32):
     site_id = site_id.astype(str)
     return X, Y, site_id
 
+def read_hdf5_with_site_id_rrup(file_path, dtype = np.float32):
+    """Reads data from an HDF5 file."""
+    with h5py.File(file_path, 'r') as f:
+        X = f['X'][:]
+        Y = f['Y'][:]
+        if 'site_id' not in f:
+            raise KeyError(f"'site_id' dataset not found in {file_path}, rerun 02_format_training_data.py to include site_id")
+        site_id = f['site_id'][:]
+        if 'rrup' not in f:
+            raise KeyError(f"'rrup' dataset not found in {file_path}, rerun 02_format_training_data.py to include rrup")
+        rrup = f['rrup'][:]
+    # add site_z column
+    X = np.column_stack((X, np.zeros((X.shape[0], 1))))
+    X = X.astype(dtype)
+    Y = Y.astype(dtype)
+    site_id = site_id.astype(str)
+    return X, Y, site_id, rrup
+
 def predict_dataset(loader, model, likelihood, contiguous = False):
     mean = torch.tensor([0.])
     lower = torch.tensor([0.])
