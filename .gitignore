@@ -1,0 +1,24 @@
+# Ignore Python cache and build files
+__pycache__/
+
+# Ignore IDE/project settings
+.vscode/
+
+# Ignore error and output files
+*.err
+*.out
+
+.DS_Store
+julia_lib/
+prediction_results/
+hazard_outputs/
+regression/
+regression_gpytorch_cst/
+Manifest.toml
+Project.toml
+n_gm_per_site.json
+regression_gpytorch/output/
+regression_gpytorch/src/archived/
+preprocessing/gm_metadata_expanded.csv
+create_power_inventory/.venv/
+create_power_inventory/Code/cache/

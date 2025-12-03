@@ -1,0 +1,12 @@
+osmnx
+networkx
+geopandas
+matplotlib
+folium
+shapely
+pandas
+numpy
+scipy
+momepy
+ipywidgets
+mapclassify
