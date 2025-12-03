@@ -54,7 +54,9 @@ if __name__ == '__main__':
     parser.add_argument('--num_training_eqs', type=int, default=100,
                         help='Number of earthquakes to use for training')
     parser.add_argument('--num_rlzs', type=str, default='1',
-                        help='Number of realizations to use for training, can be "all" or an integer')                        
+                        help='Number of realizations to use for training, can be "all" or an integer')
+    parser.add_argument('--train_on_mean', type=str2bool, default='False',
+                        help='If train on mean of realizations')                                                
     parser.add_argument('--num_testing_eqs', type=int, default=4179,
                         help='Number of earthquakes to use for testing')
     parser.add_argument('--random_seed', type=int, default=62,
@@ -81,6 +83,7 @@ if __name__ == '__main__':
     between_kernel = args.between_kernel
     source_effect = args.source_effect
     overwrite = args.overwrite
+    train_on_mean = args.train_on_mean
 
     current_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(os.path.dirname(current_dir), "output")
@@ -89,6 +92,8 @@ if __name__ == '__main__':
         dir_name += '_no_source'
     if not between_kernel:
         dir_name += '_no_between'
+    if train_on_mean:
+        dir_name += '_train_on_mean'
     trained_model_dir = os.path.join(output_dir, 'trained_models_exact', dir_name, f"{num_rlzs}_rlzs")
     if os.path.exists(trained_model_dir):
         if overwrite:
@@ -99,14 +104,20 @@ if __name__ == '__main__':
     os.makedirs(trained_model_dir, exist_ok=True)
 
     # Load training data
-    train_data_file = os.path.join(output_dir,'formatted_data', 
-                                   f'training_{num_training_eqs}_eqs', 
-                                   f'training_sites_training_eqs_2.00_ASK14_{num_training_eqs}_eqs_{num_rlzs}_var_per_eq.h5')
+    if train_on_mean:
+        train_data_file = os.path.join(output_dir,'formatted_data', 
+                                    f'training_{num_training_eqs}_eqs', 
+                                    f'training_sites_training_eqs_2.00_ASK14_{num_training_eqs}_eqs_{num_rlzs}_var_per_eq_mean.h5')
+    else:                                       
+        train_data_file = os.path.join(output_dir,'formatted_data', 
+                                    f'training_{num_training_eqs}_eqs', 
+                                    f'training_sites_training_eqs_2.00_ASK14_{num_training_eqs}_eqs_{num_rlzs}_var_per_eq.h5')
     train_x, train_y = read_hdf5(train_data_file)
     print(f"Number of training samples: {train_x.shape[0]}")
     print(f"Number of training features: {train_x.shape[1]}")
     # Centeralize y:
     train_y_mean = np.mean(train_y)
+    np.savetxt(os.path.join(trained_model_dir, 'train_y_mean.txt'), np.array([train_y_mean]), fmt='%.6f')
     train_y = train_y - train_y_mean
     train_x = torch.from_numpy(train_x)
     train_y = torch.from_numpy(train_y)
