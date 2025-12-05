@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --time=10:00:00           
+#SBATCH --time=18:00:00           
 #SBATCH -N 1   # number of nodes
 #SBATCH -n 1   # number of processor cores (i.e. tasks)
 #SBATCH --partition=gpu-a100-small # other oprtions:gpu-h100, gpu-a100-small
@@ -16,7 +16,7 @@
 #SBATCH --error=/work/07059/jyzhao/ls6/cybershake_ngmm/Scalable_GPs_NGMM/regression_gpytorch/src/4179_mean.err # STDERR
 
 NUM_TRAIN_EQS=4179
-num_epochs=500
+num_epochs=250
 BETWEEN_KERNEL="True"
 SOURCE_EFFECT="False"
 NUM_RLZ="all"
