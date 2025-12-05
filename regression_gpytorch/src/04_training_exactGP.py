@@ -39,7 +39,7 @@ def plot_training_loss(training_loss, model, save_dir):
     axes[1].legend()
 
     axes[2].set_ylim([0,10])
-    axes[2].plot(training_loss, label = "ELBO loss")
+    axes[2].plot(training_loss, label = "LOO loss")
     axes[2].set_xlabel('Iteration')
     axes[2].set_ylabel('Training loss')
     axes[2].legend()
